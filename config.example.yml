@@ -8,15 +8,17 @@ overleaf:
   timeout: 60
 
 sync:
+  # 每次周期都会先重新发现账号下的项目，再同步已启用的项目。
   interval_seconds: 300
   destination: "/backup"
+  # Web 面板中的备份开关保存在这里。
+  state_path: "/state/selection.json"
   sync_on_start: true
   git:
     enabled: true
     user_name: "Overleaf AutoSync"
     user_email: "autosync@local"
 
-projects:
-  # Project ID 可从 Overleaf 项目 URL 获取：/project/<PROJECT_ID>
-  - id: "REPLACE_WITH_PROJECT_ID"
-    name: "my-paper"
+# 不需要填写 Project ID。
+# 启动后访问 Web 面板，程序会自动列出该账号可访问的全部项目，
+# 在页面上勾选需要备份的项目即可。
