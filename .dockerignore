@@ -3,5 +3,6 @@
 .env
 config.yml
 backup
+state
 __pycache__
 *.py[cod]
