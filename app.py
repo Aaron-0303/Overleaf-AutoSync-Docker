@@ -5,7 +5,6 @@ import logging
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import threading
 import time
@@ -49,6 +48,7 @@ class ConfigError(RuntimeError):
 def load_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
         raise ConfigError(f"Config file not found: {CONFIG_PATH}")
+
     with CONFIG_PATH.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
 
@@ -60,10 +60,6 @@ def load_config() -> dict[str, Any]:
     cfg["sync"].setdefault("destination", "/backup")
     cfg["sync"].setdefault("state_path", "/state/selection.json")
     cfg["sync"].setdefault("sync_on_start", True)
-    cfg["sync"].setdefault("git", {})
-    cfg["sync"]["git"].setdefault("enabled", True)
-    cfg["sync"]["git"].setdefault("user_name", "Overleaf AutoSync")
-    cfg["sync"]["git"].setdefault("user_email", "autosync@local")
 
     cfg["overleaf"].setdefault("verify_tls", True)
     cfg["overleaf"].setdefault("timeout", 60)
@@ -82,8 +78,6 @@ def utc_now() -> str:
 
 
 def safe_local_name(name: str, project_id: str) -> str:
-    # Keep project directories readable while preventing traversal and invalid
-    # names on common filesystems (including Windows-mounted backup disks).
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip(" .")
     cleaned = re.sub(r"\s+", " ", cleaned)
     if not cleaned or cleaned in {".", ".."}:
@@ -99,7 +93,7 @@ class OverleafClient:
         self.email = env_required(cfg.get("email_env", "OVERLEAF_EMAIL"))
         self.password = env_required(cfg.get("password_env", "OVERLEAF_PASSWORD"))
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "Overleaf-AutoSync-Docker/2.0"})
+        self.session.headers.update({"User-Agent": "Overleaf-AutoSync-Docker/3.0"})
         self.csrf_token: str | None = None
 
     def _url(self, path: str) -> str:
@@ -108,12 +102,15 @@ class OverleafClient:
     @staticmethod
     def _extract_csrf(html: str) -> str | None:
         soup = BeautifulSoup(html, "html.parser")
+
         csrf_input = soup.find("input", attrs={"name": "_csrf"})
         if csrf_input and csrf_input.get("value"):
             return str(csrf_input.get("value"))
+
         csrf_meta = soup.find("meta", attrs={"name": "ol-csrfToken"})
         if csrf_meta and csrf_meta.get("content"):
             return str(csrf_meta.get("content"))
+
         return None
 
     def _load_project_page(self) -> str:
@@ -125,11 +122,14 @@ class OverleafClient:
             allow_redirects=True,
         )
         response.raise_for_status()
+
         if response.url.rstrip("/").endswith("/login"):
             raise RuntimeError("Overleaf login failed; check email/password and base_url")
+
         token = self._extract_csrf(response.text)
         if not token:
             raise RuntimeError("Could not find Overleaf CSRF token on /project")
+
         self.csrf_token = token
         return response.text
 
@@ -137,6 +137,7 @@ class OverleafClient:
         login_url = self._url("/login")
         page = self.session.get(login_url, timeout=self.timeout, verify=self.verify)
         page.raise_for_status()
+
         csrf = self._extract_csrf(page.text)
         if not csrf:
             raise RuntimeError("Could not find Overleaf CSRF token on /login")
@@ -163,6 +164,7 @@ class OverleafClient:
             "Accept": "application/json",
             "Referer": self._url("/project"),
         }
+
         response = self.session.post(
             api_url,
             json=body,
@@ -170,8 +172,8 @@ class OverleafClient:
             timeout=self.timeout,
             verify=self.verify,
         )
+
         if response.status_code == 403:
-            # CSRF tokens can change after session maintenance. Refresh once.
             self._load_project_page()
             headers["X-Csrf-Token"] = str(self.csrf_token)
             response = self.session.post(
@@ -181,6 +183,7 @@ class OverleafClient:
                 timeout=self.timeout,
                 verify=self.verify,
             )
+
         response.raise_for_status()
         payload = response.json()
         projects = payload.get("projects")
@@ -192,6 +195,7 @@ class OverleafClient:
             project_id = str(project.get("id") or project.get("_id") or "").strip()
             if not project_id:
                 continue
+
             result.append(
                 {
                     "id": project_id,
@@ -202,10 +206,12 @@ class OverleafClient:
                     "trashed": bool(project.get("trashed", False)),
                 }
             )
+
         return result
 
     def download_project_zip(self, project_id: str, destination: Path) -> None:
         url = self._url(f"/project/{project_id}/download/zip")
+
         with self.session.get(
             url,
             stream=True,
@@ -214,9 +220,11 @@ class OverleafClient:
             allow_redirects=True,
         ) as response:
             response.raise_for_status()
+
             content_type = response.headers.get("Content-Type", "")
             if "text/html" in content_type and response.url.rstrip("/").endswith("/login"):
                 raise RuntimeError("Overleaf session expired or authentication failed")
+
             with destination.open("wb") as f:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     if chunk:
@@ -228,19 +236,23 @@ class OverleafClient:
 
 def safe_extract(zip_path: Path, output_dir: Path) -> None:
     output_root = output_dir.resolve()
+
     with zipfile.ZipFile(zip_path) as archive:
         for member in archive.infolist():
             target = (output_dir / member.filename).resolve()
             if output_root != target and output_root not in target.parents:
                 raise RuntimeError(f"Unsafe path in ZIP: {member.filename}")
+
         archive.extractall(output_dir)
 
 
 def same_file(a: Path, b: Path) -> bool:
     if not b.exists() or not b.is_file():
         return False
+
     if a.stat().st_size != b.stat().st_size:
         return False
+
     with a.open("rb") as fa, b.open("rb") as fb:
         while True:
             ca = fa.read(1024 * 1024)
@@ -252,7 +264,11 @@ def same_file(a: Path, b: Path) -> bool:
 
 
 def mirror_tree(source: Path, destination: Path) -> bool:
-    """Mirror source into destination while preserving destination/.git."""
+    """Mirror source into destination.
+
+    Existing .git directories from older releases are intentionally preserved,
+    but this application no longer creates, reads or updates Git repositories.
+    """
     destination.mkdir(parents=True, exist_ok=True)
     changed = False
 
@@ -261,8 +277,10 @@ def mirror_tree(source: Path, destination: Path) -> bool:
 
     for dst in sorted(destination.rglob("*"), key=lambda p: len(p.parts), reverse=True):
         rel = dst.relative_to(destination)
+
         if rel.parts and rel.parts[0] == ".git":
             continue
+
         if dst.is_file() and rel not in source_files:
             dst.unlink()
             changed = True
@@ -280,6 +298,7 @@ def mirror_tree(source: Path, destination: Path) -> bool:
         src = source / rel
         dst = destination / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
+
         if not same_file(src, dst):
             shutil.copy2(src, dst)
             changed = True
@@ -287,40 +306,12 @@ def mirror_tree(source: Path, destination: Path) -> bool:
     return changed
 
 
-def run_git(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=check,
-    )
-
-
-def git_commit_if_needed(path: Path, git_cfg: dict[str, Any]) -> bool:
-    if not git_cfg.get("enabled", True):
-        return False
-    if not (path / ".git").exists():
-        run_git(["init"], path)
-    run_git(["config", "user.name", str(git_cfg.get("user_name", "Overleaf AutoSync"))], path)
-    run_git(["config", "user.email", str(git_cfg.get("user_email", "autosync@local"))], path)
-    run_git(["add", "-A"], path)
-    diff = run_git(["diff", "--cached", "--quiet"], path, check=False)
-    if diff.returncode == 0:
-        return False
-    if diff.returncode != 1:
-        raise RuntimeError(diff.stderr.strip() or "git diff failed")
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    run_git(["commit", "-m", f"autosync: {stamp}"], path)
-    return True
-
-
 class SyncService:
     def __init__(self, cfg: dict[str, Any]):
         self.cfg = cfg
         self.destination = Path(cfg["sync"]["destination"]).resolve()
         self.destination.mkdir(parents=True, exist_ok=True)
+
         self.state_path = Path(cfg["sync"]["state_path"]).resolve()
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -335,6 +326,7 @@ class SyncService:
         self.discovery_error: str | None = None
 
         self._seed_legacy_projects()
+
         for project_id, entry in self.registry.items():
             if entry.get("enabled"):
                 self._ensure_state(project_id, str(entry.get("name") or project_id))
@@ -342,34 +334,43 @@ class SyncService:
     def _load_registry(self) -> dict[str, dict[str, Any]]:
         if not self.state_path.exists():
             return {}
+
         try:
             payload = json.loads(self.state_path.read_text(encoding="utf-8"))
             projects = payload.get("projects", {})
             if isinstance(projects, dict):
-                return {str(k): dict(v) for k, v in projects.items() if isinstance(v, dict)}
+                return {
+                    str(k): dict(v)
+                    for k, v in projects.items()
+                    if isinstance(v, dict)
+                }
         except Exception as exc:  # noqa: BLE001
             LOG.error("Failed to read selection state %s: %s", self.state_path, exc)
+
         return {}
 
     def _save_registry_locked(self) -> None:
         payload = {"version": 1, "projects": self.registry}
         fd, tmp_name = tempfile.mkstemp(
-            prefix="selection-", suffix=".json", dir=self.state_path.parent
+            prefix="selection-",
+            suffix=".json",
+            dir=self.state_path.parent,
         )
+
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
                 f.write("\n")
+
             os.replace(tmp_name, self.state_path)
         finally:
             if os.path.exists(tmp_name):
                 os.unlink(tmp_name)
 
     def _seed_legacy_projects(self) -> None:
-        # Backward compatibility for v1 configs. New deployments do not need
-        # a projects section; any old entries become initial selected projects.
         legacy = self.cfg.get("projects") or []
         changed = False
+
         with self.meta_lock:
             for project in legacy:
                 project_id = str(project.get("id") or "").strip()
@@ -377,6 +378,7 @@ class SyncService:
                     continue
                 if project_id in self.registry:
                     continue
+
                 name = str(project.get("name") or project_id)
                 self.registry[project_id] = {
                     "enabled": True,
@@ -384,6 +386,7 @@ class SyncService:
                     "local_name": self._allocate_local_name_locked(name, project_id),
                 }
                 changed = True
+
             if changed:
                 self._save_registry_locked()
 
@@ -394,58 +397,83 @@ class SyncService:
             for pid, entry in self.registry.items()
             if pid != project_id and entry.get("local_name")
         }
+
         candidate = base
-        if candidate in used or ((self.destination / candidate).exists() and project_id not in self.registry):
+        if candidate in used or (
+            (self.destination / candidate).exists() and project_id not in self.registry
+        ):
             candidate = f"{base}__{project_id[:8]}"
+
         serial = 2
         original = candidate
         while candidate in used:
             candidate = f"{original}-{serial}"
             serial += 1
+
         return candidate
 
     def _ensure_state(self, project_id: str, name: str) -> ProjectState:
         entry = self.registry[project_id]
         local_name = str(entry["local_name"])
         state = self.states.get(project_id)
+
         if state is None:
-            state = ProjectState(project_id=project_id, name=name, local_name=local_name)
+            state = ProjectState(
+                project_id=project_id,
+                name=name,
+                local_name=local_name,
+            )
             self.states[project_id] = state
             self.project_locks[project_id] = threading.Lock()
         else:
             state.name = name
             state.local_name = local_name
+
         return state
 
     def _apply_catalog(self, projects: list[dict[str, Any]]) -> None:
         changed_registry = False
+
         with self.meta_lock:
             self.catalog = {str(p["id"]): p for p in projects}
             self.catalog_order = [str(p["id"]) for p in projects]
+
             for project_id, entry in self.registry.items():
                 project = self.catalog.get(project_id)
-                if project:
-                    new_name = str(project["name"])
-                    if entry.get("name") != new_name:
-                        entry["name"] = new_name
-                        changed_registry = True
-                    if entry.get("enabled"):
-                        self._ensure_state(project_id, new_name)
+                if not project:
+                    continue
+
+                new_name = str(project["name"])
+                if entry.get("name") != new_name:
+                    entry["name"] = new_name
+                    changed_registry = True
+
+                if entry.get("enabled"):
+                    self._ensure_state(project_id, new_name)
+
             if changed_registry:
                 self._save_registry_locked()
+
             self.last_refresh = utc_now()
             self.discovery_error = None
 
     def selected_ids(self) -> list[str]:
         with self.meta_lock:
-            return [pid for pid, entry in self.registry.items() if entry.get("enabled")]
+            return [
+                pid
+                for pid, entry in self.registry.items()
+                if entry.get("enabled")
+            ]
 
     def set_selection(self, project_ids: list[str]) -> None:
         requested = {str(pid) for pid in project_ids}
+
         with self.meta_lock:
             unknown = requested - set(self.catalog)
             if unknown:
-                raise ValueError(f"Unknown project id(s): {', '.join(sorted(unknown))}")
+                raise ValueError(
+                    f"Unknown project id(s): {', '.join(sorted(unknown))}"
+                )
 
             for project_id, entry in self.registry.items():
                 entry["enabled"] = project_id in requested
@@ -454,18 +482,26 @@ class SyncService:
                 project = self.catalog[project_id]
                 name = str(project["name"])
                 entry = self.registry.get(project_id)
+
                 if entry is None:
                     entry = {
                         "enabled": True,
                         "name": name,
-                        "local_name": self._allocate_local_name_locked(name, project_id),
+                        "local_name": self._allocate_local_name_locked(
+                            name,
+                            project_id,
+                        ),
                     }
                     self.registry[project_id] = entry
                 else:
                     entry["enabled"] = True
                     entry["name"] = name
                     if not entry.get("local_name"):
-                        entry["local_name"] = self._allocate_local_name_locked(name, project_id)
+                        entry["local_name"] = self._allocate_local_name_locked(
+                            name,
+                            project_id,
+                        )
+
                 self._ensure_state(project_id, name)
 
             self._save_registry_locked()
@@ -474,21 +510,26 @@ class SyncService:
         with self.meta_lock:
             ids = list(self.catalog_order)
             ids.extend(pid for pid in self.registry if pid not in self.catalog)
+
             rows: list[dict[str, Any]] = []
             for project_id in ids:
                 project = self.catalog.get(project_id)
                 entry = self.registry.get(project_id, {})
                 selected = bool(entry.get("enabled"))
                 state = self.states.get(project_id)
+
                 name = str(
                     (project or {}).get("name")
                     or entry.get("name")
                     or project_id
                 )
+
                 local_name = entry.get("local_name")
                 status = state.status if state else ("off" if not selected else "waiting")
+
                 if selected and project is None:
                     status = "unavailable"
+
                 rows.append(
                     {
                         "project_id": project_id,
@@ -502,9 +543,14 @@ class SyncService:
                         "last_sync": state.last_sync if state else None,
                         "last_change": state.last_change if state else None,
                         "last_error": state.last_error if state else None,
-                        "local_path": str(self.destination / str(local_name)) if local_name else None,
+                        "local_path": (
+                            str(self.destination / str(local_name))
+                            if local_name
+                            else None
+                        ),
                     }
                 )
+
             return rows
 
     def refresh_projects(self) -> None:
@@ -519,17 +565,29 @@ class SyncService:
             LOG.exception("Project discovery failed")
             raise
 
-    def _sync_project_with_client(self, project_id: str, client: OverleafClient) -> None:
+    def _sync_project_with_client(
+        self,
+        project_id: str,
+        client: OverleafClient,
+    ) -> None:
         with self.meta_lock:
             entry = self.registry.get(project_id)
             project = self.catalog.get(project_id)
+
             if not entry or not entry.get("enabled"):
                 raise RuntimeError("Project is not enabled for backup")
+
             if not project:
-                state = self._ensure_state(project_id, str(entry.get("name") or project_id))
+                state = self._ensure_state(
+                    project_id,
+                    str(entry.get("name") or project_id),
+                )
                 state.status = "unavailable"
-                state.last_error = "Project is no longer visible to this Overleaf account"
+                state.last_error = (
+                    "Project is no longer visible to this Overleaf account"
+                )
                 return
+
             state = self._ensure_state(project_id, str(project["name"]))
             lock = self.project_locks[project_id]
 
@@ -539,24 +597,32 @@ class SyncService:
 
         state.status = "syncing"
         state.last_error = None
+
         try:
             with tempfile.TemporaryDirectory(prefix="overleaf-autosync-") as tmp:
                 tmp_path = Path(tmp)
                 zip_path = tmp_path / "project.zip"
                 extracted = tmp_path / "project"
                 extracted.mkdir()
+
                 client.download_project_zip(project_id, zip_path)
                 safe_extract(zip_path, extracted)
+
                 local_path = self.destination / state.local_name
                 content_changed = mirror_tree(extracted, local_path)
-                commit_created = git_commit_if_needed(local_path, self.cfg["sync"]["git"])
 
             now = utc_now()
             state.last_sync = now
-            if content_changed or commit_created:
+            if content_changed:
                 state.last_change = now
             state.status = "ok"
-            LOG.info("Synced %s (%s), changed=%s", state.name, project_id, content_changed)
+
+            LOG.info(
+                "Synced %s (%s), changed=%s",
+                state.name,
+                project_id,
+                content_changed,
+            )
         except Exception as exc:  # noqa: BLE001
             state.status = "error"
             state.last_error = str(exc)
@@ -582,10 +648,12 @@ class SyncService:
         if not self.sync_all_lock.acquire(blocking=False):
             LOG.info("A full sync is already running")
             return
+
         try:
             client = OverleafClient(self.cfg["overleaf"])
             client.login()
             self._apply_catalog(client.list_projects())
+
             for project_id in self.selected_ids():
                 self._sync_project_with_client(project_id, client)
         except Exception as exc:  # noqa: BLE001
@@ -597,6 +665,7 @@ class SyncService:
 
     def scheduler_loop(self) -> None:
         interval = max(30, int(self.cfg["sync"].get("interval_seconds", 300)))
+
         if bool(self.cfg["sync"].get("sync_on_start", True)):
             self.sync_all()
         else:
@@ -604,6 +673,7 @@ class SyncService:
                 self.refresh_projects()
             except Exception:
                 pass
+
         while True:
             time.sleep(interval)
             self.sync_all()
@@ -659,7 +729,7 @@ PAGE = """
   <div class="top">
     <div>
       <h1>Overleaf AutoSync</h1>
-      <div class="sub">登录账号后自动发现项目 · 你只需要选择哪些项目要备份</div>
+      <div class="sub">自动发现 Overleaf 项目 · 选择项目后定时镜像到本地文件夹</div>
     </div>
     <div class="stats">
       <span class="pill">发现 {{ discovered_count }} 个项目</span>
@@ -707,7 +777,7 @@ PAGE = """
         <div class="empty">尚未发现项目。请确认 Overleaf 账号、密码和服务器地址后点击“刷新项目”。</div>
       {% endif %}
       <div class="savebar">
-        <div class="sub" style="margin:0">取消备份不会删除已经同步到本地的文件或 Git 历史。</div>
+        <div class="sub" style="margin:0">取消备份不会删除已经同步到本地的文件。</div>
         <button type="submit">保存备份选择</button>
       </div>
     </form>
@@ -768,7 +838,12 @@ def save_selection():
 def sync_one(project_id: str):
     if project_id not in service.selected_ids():
         return "project is not enabled for backup", 409
-    threading.Thread(target=service.sync_project, args=(project_id,), daemon=True).start()
+
+    threading.Thread(
+        target=service.sync_project,
+        args=(project_id,),
+        daemon=True,
+    ).start()
     return redirect(url_for("index"))
 
 
@@ -790,12 +865,15 @@ def api_projects():
 def api_selection():
     payload = request.get_json(silent=True) or {}
     project_ids = payload.get("project_ids", [])
+
     if not isinstance(project_ids, list):
         return jsonify({"error": "project_ids must be a list"}), 400
+
     try:
         service.set_selection([str(pid) for pid in project_ids])
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+
     threading.Thread(target=service.sync_all, daemon=True).start()
     return jsonify({"ok": True, "projects": service.rows()})
 
@@ -825,10 +903,18 @@ def healthz():
 
 
 def start_scheduler() -> None:
-    thread = threading.Thread(target=service.scheduler_loop, name="autosync-scheduler", daemon=True)
+    thread = threading.Thread(
+        target=service.scheduler_loop,
+        name="autosync-scheduler",
+        daemon=True,
+    )
     thread.start()
 
 
 if __name__ == "__main__":
     start_scheduler()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8080")), threaded=True)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8080")),
+        threaded=True,
+    )
