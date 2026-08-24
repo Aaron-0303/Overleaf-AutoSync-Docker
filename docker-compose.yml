@@ -1,0 +1,18 @@
+services:
+  autosync:
+    build: .
+    container_name: overleaf-autosync
+    restart: unless-stopped
+    environment:
+      CONFIG_PATH: /app/config.yml
+      OVERLEAF_EMAIL: ${OVERLEAF_EMAIL:-}
+      OVERLEAF_PASSWORD: ${OVERLEAF_PASSWORD:-}
+      TZ: ${TZ:-Asia/Shanghai}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ${SYNC_DIR:-./backup}:/backup
+      - ${CONFIG_FILE:-./config.example.yml}:/app/config.yml:ro
+    ports:
+      - "${WEB_PORT:-30389}:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

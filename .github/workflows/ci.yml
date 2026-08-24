@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Python syntax check
+        run: python -m py_compile app.py
+
+      - name: Validate example config
+        run: python -c "import yaml; yaml.safe_load(open('config.example.yml', encoding='utf-8'))"
+
+      - name: Build Docker image
+        run: docker build -t overleaf-autosync:test .
