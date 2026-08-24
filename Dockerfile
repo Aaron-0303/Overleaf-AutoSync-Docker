@@ -1,16 +1,39 @@
-FROM python:3.12-slim
+ARG PYTHON_IMAGE=python:3.12-slim
+FROM ${PYTHON_IMAGE}
+
+ARG DEBIAN_MIRROR=https://mirrors.aliyun.com
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# 默认使用国内镜像，加快中国大陆服务器构建速度。
+# 仍可通过 docker build --build-arg 覆盖为官方源或其他镜像。
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i \
+        -e "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" \
+        -e "s|https://deb.debian.org|${DEBIAN_MIRROR}|g" \
+        -e "s|http://security.debian.org|${DEBIAN_MIRROR}|g" \
+        -e "s|https://security.debian.org|${DEBIAN_MIRROR}|g" \
+        /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    if [ -f /etc/apt/sources.list ]; then \
+      sed -i \
+        -e "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" \
+        -e "s|https://deb.debian.org|${DEBIAN_MIRROR}|g" \
+        -e "s|http://security.debian.org|${DEBIAN_MIRROR}|g" \
+        -e "s|https://security.debian.org|${DEBIAN_MIRROR}|g" \
+        /etc/apt/sources.list; \
+    fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates; \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --index-url "${PIP_INDEX_URL}" -r requirements.txt
 COPY app.py .
 COPY config.example.yml ./config.example.yml
 
