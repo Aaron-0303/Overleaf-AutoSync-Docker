@@ -11,6 +11,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ${SYNC_DIR:-./backup}:/backup
+      - ${STATE_DIR:-./state}:/state
       - ${CONFIG_FILE:-./config.example.yml}:/app/config.yml:ro
     ports:
       - "${WEB_PORT:-30389}:8080"
