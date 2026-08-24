@@ -24,9 +24,24 @@ jobs:
       - name: Validate example config
         run: python -c "import yaml; yaml.safe_load(open('config.example.yml', encoding='utf-8'))"
 
+      - name: Prepare test config
+        run: |
+          cat > "$RUNNER_TEMP/autosync-test.yml" <<EOF
+          overleaf:
+            base_url: "http://127.0.0.1:30388"
+            verify_tls: false
+            timeout: 10
+          sync:
+            interval_seconds: 300
+            destination: "$RUNNER_TEMP/autosync-backup"
+            state_path: "$RUNNER_TEMP/autosync-state/selection.json"
+            sync_on_start: false
+            history_limit: 50
+          EOF
+
       - name: Verify change-aware Git history
         env:
-          CONFIG_PATH: ${{ github.workspace }}/config.example.yml
+          CONFIG_PATH: ${{ runner.temp }}/autosync-test.yml
         run: |
           python - <<'PY'
           import tempfile
