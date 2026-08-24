@@ -19,7 +19,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Python syntax check
-        run: python -m py_compile app.py
+        run: python -m py_compile app.py runner.py
 
       - name: Validate example config
         run: python -c "import yaml; yaml.safe_load(open('config.example.yml', encoding='utf-8'))"
@@ -71,6 +71,35 @@ jobs:
               assert any(f["path"] == "main.tex" for f in versions[0]["files"])
               diff = app.git_file_diff(root, sha2, "main.tex")
               assert "+version two" in diff
+          PY
+
+      - name: Verify historical ZIP export
+        env:
+          CONFIG_PATH: ${{ runner.temp }}/autosync-test.yml
+        run: |
+          python - <<'PY'
+          import tempfile
+          import zipfile
+          from pathlib import Path
+          import runner
+
+          with tempfile.TemporaryDirectory() as tmp:
+              parent = Path(tmp)
+              root = parent / "Paper"
+              root.mkdir()
+              (root / "main.tex").write_text("old version\n", encoding="utf-8")
+              sha1, _ = runner.base.git_commit_changes(root, "v1")
+              (root / "main.tex").write_text("new version\n", encoding="utf-8")
+              sha2, _ = runner.base.git_commit_changes(root, "v2")
+
+              archive, _ = runner.export_commit_zip(root, sha1)
+              assert archive.exists() and archive.stat().st_size > 0
+              assert sha1[:8] in archive.name
+              assert sha2[:8] not in archive.name
+
+              with zipfile.ZipFile(archive) as zf:
+                  assert "Paper/main.tex" in zf.namelist()
+                  assert zf.read("Paper/main.tex").decode() == "old version\n"
           PY
 
       - name: Build Docker image
