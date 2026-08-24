@@ -12,6 +12,7 @@ services:
       CONFIG_PATH: /app/config.yml
       OVERLEAF_EMAIL: ${OVERLEAF_EMAIL:-}
       OVERLEAF_PASSWORD: ${OVERLEAF_PASSWORD:-}
+      SYNC_DIR_HOST: ${SYNC_DIR:-./backup}
       TZ: ${TZ:-Asia/Shanghai}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
