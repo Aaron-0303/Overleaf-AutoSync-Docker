@@ -73,6 +73,37 @@ jobs:
               assert "+version two" in diff
           PY
 
+      - name: Verify rich unified diff parsing
+        env:
+          CONFIG_PATH: ${{ runner.temp }}/autosync-test.yml
+        run: |
+          python - <<'PY'
+          import runner
+
+          sample = """diff --git a/supplemental.tex b/supplemental.tex
+          new file mode 100644
+          index 0000000..32c609b
+          --- /dev/null
+          +++ b/supplemental.tex
+          @@ -0,0 +1,3 @@
+          +\\documentclass{IEEEtran}
+          +
+          +\\begin{document}
+          """
+          # Strip indentation introduced by YAML/Python formatting only.
+          sample = "\n".join(line[10:] if line.startswith("          ") else line for line in sample.splitlines())
+          rows = runner.parse_unified_diff(sample)
+
+          assert [row["kind"] for row in rows[:5]] == ["meta", "meta", "meta", "filemeta", "filemeta"]
+          additions = [row for row in rows if row["kind"] == "add"]
+          assert len(additions) == 3
+          assert [row["new_line"] for row in additions] == [1, 2, 3]
+          assert all(row["old_line"] is None for row in additions)
+          assert additions[0]["marker"] == "+"
+          assert additions[0]["text"] == "\\documentclass{IEEEtran}"
+          assert any(row["kind"] == "hunk" for row in rows)
+          PY
+
       - name: Verify historical ZIP export
         env:
           CONFIG_PATH: ${{ runner.temp }}/autosync-test.yml
