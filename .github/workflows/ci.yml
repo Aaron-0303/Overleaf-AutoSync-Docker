@@ -24,5 +24,39 @@ jobs:
       - name: Validate example config
         run: python -c "import yaml; yaml.safe_load(open('config.example.yml', encoding='utf-8'))"
 
+      - name: Verify change-aware Git history
+        env:
+          CONFIG_PATH: ${{ github.workspace }}/config.example.yml
+        run: |
+          python - <<'PY'
+          import tempfile
+          from pathlib import Path
+          import app
+
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              (root / "main.tex").write_text("version one\n", encoding="utf-8")
+
+              sha1, changes1 = app.git_commit_changes(root, "initial")
+              assert sha1 and changes1, "first snapshot must create a commit"
+              assert app.git_version_count(root) == 1
+
+              sha_same, changes_same = app.git_commit_changes(root, "should not exist")
+              assert sha_same == sha1
+              assert changes_same == [], "unchanged content must not create a commit"
+              assert app.git_version_count(root) == 1
+
+              (root / "main.tex").write_text("version two\n", encoding="utf-8")
+              sha2, changes2 = app.git_commit_changes(root, "second")
+              assert sha2 and sha2 != sha1 and changes2
+              assert app.git_version_count(root) == 2
+
+              versions = app.git_versions(root, 10)
+              assert len(versions) == 2
+              assert any(f["path"] == "main.tex" for f in versions[0]["files"])
+              diff = app.git_file_diff(root, sha2, "main.tex")
+              assert "+version two" in diff
+          PY
+
       - name: Build Docker image
         run: docker build -t overleaf-autosync:test .
