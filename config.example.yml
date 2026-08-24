@@ -1,6 +1,5 @@
 overleaf:
-  # 如果 AutoSync 与 Overleaf 在同一台 Linux 主机，推荐使用下面这个地址。
-  # docker-compose.yml 已配置 host-gateway。
+  # AutoSync 与 Overleaf 在同一台 Linux 主机时推荐使用这个地址。
   base_url: "http://host.docker.internal:30388"
   email_env: "OVERLEAF_EMAIL"
   password_env: "OVERLEAF_PASSWORD"
@@ -8,13 +7,17 @@ overleaf:
   timeout: 60
 
 sync:
-  # 每次周期都会先重新发现账号下的项目，再同步已启用的项目。
+  # 每隔多久检查一次 Overleaf。默认 300 秒 = 5 分钟。
+  # 如果远端 lastUpdated 没变化且本地仓库干净，会直接跳过下载。
   interval_seconds: 300
   destination: "/backup"
-  # Web 面板中的备份开关保存在这里。
   state_path: "/state/selection.json"
   sync_on_start: true
 
+  # 项目详情页默认展示最近多少个 Git 版本。
+  history_limit: 50
+
 # 不需要填写 Project ID。
 # 启动后访问 Web 面板，程序会自动列出该账号可访问的全部项目，
-# 在页面上勾选需要备份的项目即可。
+# 勾选需要备份的项目即可。
+# Git 只用于本地版本历史，不会 push 到 GitHub 或其他远程仓库。

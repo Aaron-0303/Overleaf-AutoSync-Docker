@@ -9,7 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 # 默认使用国内镜像，加快中国大陆服务器构建速度。
-# 仍可通过 docker build --build-arg 覆盖为官方源或其他镜像。
+# Git 用于每个论文项目的本地版本历史，不连接远程仓库。
 RUN set -eux; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
       sed -i \
@@ -28,7 +28,7 @@ RUN set -eux; \
         /etc/apt/sources.list; \
     fi; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates; \
+    apt-get install -y --no-install-recommends ca-certificates git; \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
