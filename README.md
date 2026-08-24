@@ -2,24 +2,22 @@
 
 一个面向 **自建 Overleaf Community Server / Overleaf Toolkit** 的 Docker 自动同步工具。
 
-只需要提供 Overleaf 地址、邮箱和密码，AutoSync 会自动登录并发现该账号可访问的全部项目。随后在 Web 面板中勾选需要备份的论文即可，无需手动查找或填写 Project ID。
+只需要提供 Overleaf 地址、邮箱和密码，AutoSync 会自动登录并发现该账号可访问的全部项目。随后在 Web 面板中勾选需要备份的论文即可，无需手动填写 Project ID。
 
-> 设计目标：**Overleaf → 本地单向备份**。不会把本地修改自动推回 Overleaf，因此不会产生双向同步冲突。
+> 设计目标：**Overleaf → 本地单向镜像备份**。不会把本地修改推回 Overleaf，也不使用 Git。
 
 ## 功能
 
 - 自动登录自建 Overleaf
-- **自动发现账号可访问的全部项目**
-- Web 面板展示项目名称、权限、更新时间、归档/回收站状态
-- 在 Web 中勾选“是否备份”，不需要手填 Project ID
-- 备份选择持久化，容器重启/重建后仍保留
+- 自动发现账号可访问的全部项目
+- Web 面板显示项目名称、权限、更新时间、归档/回收站状态
+- 在 Web 中勾选是否备份，不需要手填 Project ID
+- 备份选择持久化，容器重启或重建后仍保留
 - 默认每 5 分钟重新发现项目并同步已启用项目
-- Overleaf 项目 ZIP → 普通 `.tex/.bib/figures` 目录
-- 每个项目自动维护独立 Git 仓库
-- 只有内容发生变化时才创建 Git commit
-- Overleaf 删除文件后，本地镜像同步删除，但旧内容仍可从 Git 历史恢复
-- “刷新项目”“立即同步”“保存备份选择”操作
-- `/api/projects`、`/api/status`、`/api/selection`、`/api/sync`、`/api/refresh`
+- 将 Overleaf 项目保存成普通 `.tex/.bib/figures` 文件夹
+- Overleaf 中新增、修改、删除的文件会同步到本地镜像
+- 支持“刷新项目”“立即同步”“保存备份选择”
+- 提供 `/api/projects`、`/api/status`、`/api/selection`、`/api/sync`、`/api/refresh`
 - Docker Healthcheck
 - 登录密码只从环境变量读取
 - ZIP 路径穿越保护
@@ -41,11 +39,9 @@ Overleaf 账号
              ↓
       下载项目 ZIP
              ↓
-      安全解压 / 镜像
+      安全解压
              ↓
-      /backup/<项目名>
-             ↓
-         Git commit
+      镜像到本地目录
 ```
 
 ## 本地目录效果
@@ -53,17 +49,15 @@ Overleaf 账号
 ```text
 /data-12/M2023-WX/OverleafSync/
 ├── MAGIC-SLAM/
-│   ├── .git/
 │   ├── main.tex
 │   ├── sections/
 │   ├── figures/
 │   └── refs.bib
 └── ActiveSplat/
-    ├── .git/
     └── ...
 ```
 
-每个项目都是普通文件夹，可以直接用 VS Code 等编辑器打开，也可以通过 `git log` 找回历史版本。
+每个项目就是普通文件夹，可以直接使用 VS Code、TeXstudio 等工具打开。
 
 ## 快速部署
 
@@ -73,6 +67,8 @@ Overleaf 账号
 git clone https://github.com/Aaron-0303/Overleaf-AutoSync-Docker.git
 cd Overleaf-AutoSync-Docker
 ```
+
+这里的 `git clone` 只是下载本项目代码，**论文备份本身不使用 Git**。
 
 ### 2. 创建配置
 
@@ -95,11 +91,11 @@ TZ=Asia/Shanghai
 LOG_LEVEL=INFO
 ```
 
-`.env` 已被 `.gitignore` 忽略。不要把真实密码提交到 GitHub。
+`.env` 已被 `.gitignore` 忽略，不要把真实密码提交到公开仓库。
 
 ### 3. 配置 Overleaf 地址
 
-编辑 `config.yml`：
+`config.yml`：
 
 ```yaml
 overleaf:
@@ -114,13 +110,17 @@ sync:
   destination: "/backup"
   state_path: "/state/selection.json"
   sync_on_start: true
-  git:
-    enabled: true
-    user_name: "Overleaf AutoSync"
-    user_email: "autosync@local"
 ```
 
-**这里不需要任何 Project ID。**
+这里不需要任何 Project ID。
+
+配置含义：
+
+- `base_url`：Overleaf 地址
+- `interval_seconds`：自动同步周期，默认 300 秒
+- `destination`：容器内部备份目录，由 Docker 映射到 `SYNC_DIR`
+- `state_path`：保存 Web 中勾选状态的位置
+- `sync_on_start`：容器启动后是否立即同步
 
 ### 4. 启动
 
@@ -128,7 +128,7 @@ sync:
 docker compose up -d --build
 ```
 
-查看：
+查看状态：
 
 ```bash
 docker compose ps
@@ -155,7 +155,7 @@ http://10.157.197.46:30389/
 
 1. 勾选需要备份的项目；
 2. 点击 **保存备份选择**；
-3. 新启用项目会立即开始第一次同步；
+3. 新启用项目立即开始第一次同步；
 4. 后续按照 `interval_seconds` 周期自动同步。
 
 页面还支持：
@@ -167,9 +167,9 @@ http://10.157.197.46:30389/
 - 查看同步状态和错误
 - 对单个已启用项目立即同步
 
-## 项目发现
+## 自动发现项目
 
-AutoSync 使用登录后的 Overleaf 项目列表接口获取当前账号可以访问的项目，因此可以发现：
+AutoSync 使用登录后的 Overleaf 项目列表接口获取当前账号可以访问的项目，包括：
 
 - 自己拥有的项目
 - 被邀请协作的项目
@@ -177,9 +177,7 @@ AutoSync 使用登录后的 Overleaf 项目列表接口获取当前账号可以�
 - 已归档项目
 - 回收站项目
 
-Web 面板会显示相应状态，由你决定是否备份。
-
-如果在 Overleaf 中新建了一篇论文，不需要修改配置。下一个同步周期会自动发现，也可以直接点击 Web 中的 **刷新项目**。
+如果之后在 Overleaf 新建论文，不需要修改配置。下一个同步周期会自动发现，也可以在 Web 中点击 **刷新项目**。
 
 ## 备份选择如何保存
 
@@ -195,32 +193,13 @@ Docker Compose 默认映射为：
 ./state/selection.json
 ```
 
-可通过 `.env` 修改：
+也可以在 `.env` 中改到其他磁盘：
 
 ```env
 STATE_DIR=/data-12/M2023-WX/OverleafAutoSyncState
 ```
 
-取消某个项目的备份只会停止后续自动同步，**不会删除已经存在的本地项目目录，也不会删除 `.git` 历史**。
-
-## 为什么使用 `host.docker.internal`
-
-如果 Overleaf 和 AutoSync 在同一台 Linux 服务器，Overleaf 的 `30388` 通常是宿主机暴露端口。
-
-`docker-compose.yml` 已配置：
-
-```yaml
-extra_hosts:
-  - "host.docker.internal:host-gateway"
-```
-
-因此 AutoSync 可以直接使用：
-
-```text
-http://host.docker.internal:30388
-```
-
-如果 Overleaf 在另一台服务器，把 `base_url` 改成实际地址即可。
+取消某个项目的备份只会停止后续自动同步，**不会删除已经存在的本地项目目录**。
 
 ## 自动同步逻辑
 
@@ -238,50 +217,53 @@ http://host.docker.internal:30388
 临时目录安全解压
     ↓
 镜像到 /backup/<project-name>
-    ↓
-保留 .git
-    ↓
-git add -A
-    ↓
-有变化 → git commit
-无变化 → 不创建 commit
 ```
 
 项目下载和解压先在临时目录完成，不会把半个 ZIP 直接写进最终论文目录。
 
+同步目录是 **Overleaf 的镜像目标**。如果你直接在本地修改这些文件，下一次同步时可能会被 Overleaf 中的版本覆盖。
+
 ## 项目重名
 
-如果两个 Overleaf 项目名称相同，AutoSync 会自动给后选择的项目增加 Project ID 前缀片段，例如：
+如果两个 Overleaf 项目名称相同，AutoSync 会自动给其中一个项目增加 Project ID 片段，例如：
 
 ```text
 Paper/
 Paper__67ab12cd/
 ```
 
-Web 选择状态会记住项目对应的本地目录，因此以后取消再重新启用，也会继续使用原目录。
+## 关于旧版本的 `.git`
 
-## Git 历史
+早期版本曾经为每个论文目录创建 Git 历史。当前版本已经完全移除 Git 依赖，不会再初始化仓库或自动提交。
 
-进入任意项目：
-
-```bash
-cd /data-12/M2023-WX/OverleafSync/MAGIC-SLAM
-git log --oneline --decorate
-```
-
-查看旧版本：
+为了避免升级时误删历史，旧版本已经存在的 `.git` 目录会被保留，但 AutoSync 不会再读取或修改它。确认不需要后，你可以自行删除：
 
 ```bash
-git show <commit>:main.tex
+find /data-12/M2023-WX/OverleafSync -mindepth 2 -maxdepth 2 -type d -name .git
 ```
 
-恢复误删文件：
+确认列表无误后再手动删除对应 `.git` 目录即可。
 
-```bash
-git restore --source <commit> -- path/to/file.tex
+## 为什么使用 `host.docker.internal`
+
+如果 Overleaf 和 AutoSync 在同一台 Linux 服务器，Overleaf 的 `30388` 是宿主机暴露端口。
+
+`docker-compose.yml` 已配置：
+
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
 ```
 
-注意：同步目录是 **Overleaf 的本地镜像目标**。直接修改其中内容可能在下一次同步时被 Overleaf 版本覆盖。如果需要长期本地编辑，建议对该目录另外 `git clone` 一份，或者先在 Web 中关闭该项目的自动备份。
+因此 AutoSync 可以直接通过：
+
+```text
+http://host.docker.internal:30388
+```
+
+访问宿主机上的 Overleaf。
+
+如果 Overleaf 在另一台服务器，把 `base_url` 改成实际地址即可。
 
 ## Web / API
 
@@ -317,29 +299,15 @@ curl -X POST http://127.0.0.1:30389/api/sync
 curl http://127.0.0.1:30389/healthz
 ```
 
-## 从 v1 升级
-
-早期版本要求：
-
-```yaml
-projects:
-  - id: "..."
-    name: "..."
-```
-
-新版本不再需要该部分。
-
-为了兼容已有部署，如果旧 `config.yml` 中仍有 `projects:`，这些项目会被当作初始启用项目导入到新的 `selection.json`。确认 Web 面板正常后即可删除旧配置中的 `projects:`。
-
 ## 与灾难恢复备份的关系
 
-本工具备份的是 **可直接阅读和恢复的论文源码**，不能替代完整 Overleaf 服务器备份。
+本工具备份的是 **可直接阅读的论文源码镜像**，不能替代完整 Overleaf 服务器备份。
 
 建议同时保留：
 
 ```text
 Overleaf backups/
-├── projects/      # AutoSync：普通 TeX + Git 历史
+├── projects/      # AutoSync：普通 TeX 项目目录
 └── disaster/      # MongoDB + /var/lib/overleaf + Redis
 ```
 
@@ -358,7 +326,8 @@ Overleaf backups/
 - 单向 Overleaf → 本地，不执行本地 → Overleaf 推送
 - 认证依赖 Community Server 标准登录流程
 - Web 面板自身目前不带账号认证
-- 不会自动删除已取消备份的本地论文目录，这是为了避免误删数据
+- 不会自动删除已取消备份的本地论文目录，以避免误删数据
+- 不提供历史版本管理；如需版本历史，应另外使用独立备份或快照工具
 
 ## License
 

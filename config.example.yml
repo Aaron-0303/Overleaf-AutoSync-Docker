@@ -14,10 +14,6 @@ sync:
   # Web 面板中的备份开关保存在这里。
   state_path: "/state/selection.json"
   sync_on_start: true
-  git:
-    enabled: true
-    user_name: "Overleaf AutoSync"
-    user_email: "autosync@local"
 
 # 不需要填写 Project ID。
 # 启动后访问 Web 面板，程序会自动列出该账号可访问的全部项目，
