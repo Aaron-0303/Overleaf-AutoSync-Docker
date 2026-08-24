@@ -1,0 +1,22 @@
+overleaf:
+  # 如果 AutoSync 与 Overleaf 在同一台 Linux 主机，推荐使用下面这个地址。
+  # docker-compose.yml 已配置 host-gateway。
+  base_url: "http://host.docker.internal:30388"
+  email_env: "OVERLEAF_EMAIL"
+  password_env: "OVERLEAF_PASSWORD"
+  verify_tls: false
+  timeout: 60
+
+sync:
+  interval_seconds: 300
+  destination: "/backup"
+  sync_on_start: true
+  git:
+    enabled: true
+    user_name: "Overleaf AutoSync"
+    user_email: "autosync@local"
+
+projects:
+  # Project ID 可从 Overleaf 项目 URL 获取：/project/<PROJECT_ID>
+  - id: "REPLACE_WITH_PROJECT_ID"
+    name: "my-paper"
